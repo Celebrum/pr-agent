@@ -11,6 +11,7 @@ build/
 docs/.cache/
 
 document a ignorer
+.env
 localhost.json
 setup.py
 pyproject.toml
