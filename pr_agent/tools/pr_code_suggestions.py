@@ -151,11 +151,11 @@ class PRCodeSuggestions:
                         pr_body += HelpMessage.get_improve_usage_guide()
                         pr_body += "\n</details>\n"
 
-
                     # Output the relevant configurations if enabled
                     if get_settings().get('config', {}).get('output_relevant_configurations', False):
                         pr_body += show_relevant_configurations(relevant_section='pr_code_suggestions')
 
+                    # publish the PR comment
                     if get_settings().pr_code_suggestions.persistent_comment:
                         final_update_message = False
                         self.publish_persistent_comment_with_history(pr_body,
@@ -171,6 +171,24 @@ class PRCodeSuggestions:
                         else:
                             self.git_provider.publish_comment(pr_body)
 
+                    # dual publishing mode
+                    if int(get_settings().pr_code_suggestions.dual_publishing_score_threshold) > 0:
+                        data_above_threshold = {'code_suggestions': []}
+                        try:
+                            for suggestion in data['code_suggestions']:
+                                if int(suggestion.get('score', 0)) >= int(get_settings().pr_code_suggestions.dual_publishing_score_threshold) \
+                                        and suggestion.get('improved_code'):
+                                    data_above_threshold['code_suggestions'].append(suggestion)
+                                    if not data_above_threshold['code_suggestions'][-1]['existing_code']:
+                                        get_logger().info(f'Identical existing and improved code for dual publishing found')
+                                        data_above_threshold['code_suggestions'][-1]['existing_code'] = suggestion[
+                                            'improved_code']
+                            if data_above_threshold['code_suggestions']:
+                                get_logger().info(
+                                    f"Publishing {len(data_above_threshold['code_suggestions'])} suggestions in dual publishing mode")
+                                self.push_inline_code_suggestions(data_above_threshold)
+                        except Exception as e:
+                            get_logger().error(f"Failed to publish dual publishing suggestions, error: {e}")
                 else:
                     self.push_inline_code_suggestions(data)
                     if self.progress_response:
@@ -349,6 +367,18 @@ class PRCodeSuggestions:
                                                          "code_suggestions_feedback": code_suggestions_feedback[i]})
                             suggestion["score"] = 7
                             suggestion["score_why"] = ""
+
+                        # if the before and after code is the same, clear one of them
+                        try:
+                            if suggestion['existing_code'] == suggestion['improved_code']:
+                                get_logger().debug(
+                                    f"edited improved suggestion {i + 1}, because equal to existing code: {suggestion['existing_code']}")
+                                if get_settings().pr_code_suggestions.commitable_code_suggestions:
+                                    suggestion['improved_code'] = ""  # we need 'existing_code' to locate the code in the PR
+                                else:
+                                    suggestion['existing_code'] = ""
+                        except Exception as e:
+                            get_logger().error(f"Error processing suggestion {i + 1}, error: {e}")
             else:
                 # get_logger().error(f"Could not self-reflect on suggestions. using default score 7")
                 for i, suggestion in enumerate(data["code_suggestions"]):
@@ -404,13 +434,6 @@ class PRCodeSuggestions:
                     continue
 
                 if ('existing_code' in suggestion) and ('improved_code' in suggestion):
-                    if suggestion['existing_code'] == suggestion['improved_code']:
-                        get_logger().debug(
-                            f"edited improved suggestion {i + 1}, because equal to existing code: {suggestion['existing_code']}")
-                        if get_settings().pr_code_suggestions.commitable_code_suggestions:
-                            suggestion['improved_code'] = ""  # we need 'existing_code' to locate the code in the PR
-                        else:
-                            suggestion['existing_code'] = ""
                     suggestion = self._truncate_if_needed(suggestion)
                     one_sentence_summary_list.append(suggestion['one_sentence_summary'])
                     suggestion_list.append(suggestion)
